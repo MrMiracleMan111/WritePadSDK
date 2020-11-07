@@ -35,9 +35,20 @@
  *
  * ************************************************************************************* */
 
+using System.Threading;
+using System.IO.Ports;
+using System.Collections;
+
 namespace WritePadSDK_WPFSample
 {
+
+    public enum Pen_State
+    {
+        writing, not_pressed
+    }
+
     public partial class App
     {
+        
     }
 }

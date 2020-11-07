@@ -37,15 +37,33 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.VisualBasic;
 using System.Windows.Media;
+using System.Diagnostics;
 using System.Windows.Shapes;
+using System.Windows.Threading;
+using System.Threading;
+using System.IO.Ports;
+using WindowsInput.Native;
+using WindowsInput;
 using WritePadSDK_WPFSample.SDK;
+
+
+public static class Extensions
+{
+    public static T[] SubArray<T>(this T[] array, int offset, int length)
+    {
+        return new ArraySegment<T>(array, offset, length)
+                    .ToArray();
+    }
+}
 
 namespace WritePadSDK_WPFSample
 {
@@ -57,11 +75,275 @@ namespace WritePadSDK_WPFSample
         private double _y1;
         private double _x2;
         private double _y2;
-
         private const float GRID_GAP = 65;
+        public SerialPort serial = new SerialPort();
+        int baudRate = 9600;
+        int readTimeout = 1000;
+        bool running = true;
+        public static Mutex serial_buffer_mutex = new Mutex();
+        public static Mutex command_mutex = new Mutex();
+        public bool penDown = false;
+        public Pen_State stylusStatus = Pen_State.not_pressed;
+        int maxStackSize = 5;
+        //create small dropout stack of past pen movements
+        List<Point> penMovements = new List<Point>();
+        ThreadStart Serial_Loop_Reference;
+        public Thread Serial_Thread;
+        private InputSimulator simulator = new InputSimulator();
+
+        public void ConnectToUSB(string PortName)
+        {
+            serial = new SerialPort();
+            serial.BaudRate = baudRate;
+            serial.PortName = PortName;
+            //serial.DataBits = 8;
+            serial.StopBits = StopBits.One;
+            serial.Parity = Parity.None;
+            serial.Handshake = Handshake.None;
+            //serial.ReadTimeout = readTimeout;
+            serial.DtrEnable = true;
+            serial.RtsEnable = true;
+            
+            serial_buffer_mutex.WaitOne();
+            try
+            {
+                Debug.WriteLine("Connecting to usb...");
+                serial.Open();
+                serial.DiscardInBuffer();
+                Serial_Thread.Start();
+                ErrorText.Text = "Thread Running...";
+            }
+            catch (System.IO.IOException)
+            {
+                ErrorText.Text = "Error: System IO Exception!";
+            }
+            catch (InvalidOperationException)
+            {
+                ErrorText.Text = "Error: Invalid Operation Exception!";
+            }
+            catch (UnauthorizedAccessException)
+            {
+                ErrorText.Text = "Error: Unauthorized Access Exception!";
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                ErrorText.Text = "Error: Arguement Out of Range Exception!";
+            }
+            catch (ArgumentException)
+            {
+                ErrorText.Text = "Error: Arguement Exception!";
+            }
+            serial_buffer_mutex.ReleaseMutex();
+        }
+
+        struct SerialCommand
+        {
+            public char infoChar;
+            public Point drawPoint;
+            public float time_of_command;
+        }
+        Queue<SerialCommand> Command_Buffer = new Queue<SerialCommand>();
+        
+        Queue<Byte> serialBuffer = new Queue<byte>();
+
+        public void SerialLoop()
+        {
+            //this will close any other SerialLoop threads
+            running = false;
+            Thread.Sleep(10);
+            running = true;
+
+            //main loop logic
+            while (running)
+            {
+                Thread.Sleep(2);
+                int currentBytes = serial.BytesToRead;
+                if(currentBytes > 0)
+                {
+                    byte[] response = new byte[currentBytes];
+                    serial.Read(response, 0, currentBytes);
+                    serial_buffer_mutex.WaitOne();
+                    for (int i = 0; i < currentBytes; i++)
+                    {
+                        serialBuffer.Enqueue(response[i]);
+                    }
+                    serial_buffer_mutex.ReleaseMutex();
+                }
+                
+            }
+        }
+
+        private float lift_countdown = 0.5f;
+        private float old_time = 0.0f;
+        private bool do_lift = false;
+        private Nullable<SerialCommand> old_command = new Nullable<SerialCommand>();
+        //Method called every tick of the timer
+        private void Window_Tick(object sender, object e)
+        {
+            int buff_count = serialBuffer.Count;
+            while (buff_count >= 5) {
+                buff_count -= 5;
+                //read the first 5 bytes in the array
+                byte[] response = new byte[5];
+                byte infoChar = new byte();
+                serial_buffer_mutex.WaitOne();
+                for (int i = 0; i < 5; i++)
+                {
+                    response[i] = serialBuffer.Dequeue();
+                }
+                serial_buffer_mutex.ReleaseMutex();
+                byte[] read_data = new byte[] { response[1], response[2], response[3], response[4] };
+                infoChar = response[0];
+
+                /*
+
+                 bits are read from right to left
+
+                0000 0101 = 5
+
+                 */
+                Debug.WriteLine("Information Character: " + (char)(infoChar));
+                //extract x and y value from the 4 bytes
+                UInt16 xValue = 0x0000;
+                xValue |= read_data[1];
+                xValue |= (ushort)(xValue << 8);
+                xValue |= read_data[0];
+
+                UInt16 yValue = 0x0000;
+                yValue |= read_data[3];
+                yValue |= (ushort)(yValue << 8);
+                yValue |= read_data[2];
+
+                SerialCommand command = new SerialCommand();
+                Point point = new Point();
+                point.X = xValue;
+                point.Y = yValue;
+                Debug.WriteLine("X: " + xValue + " Y: " + yValue);
+                command.drawPoint = point;
+                command.infoChar = (char)(infoChar);
+                command.time_of_command = DateTime.Now.Millisecond;
+                command_mutex.WaitOne();
+                Command_Buffer.Enqueue(command);
+                command_mutex.ReleaseMutex();
+
+                /*
+                 * 
+                 *      This can be one of 3 characters
+                 *      R = Clear
+                 *      D = Drawing has been finished
+                 *      Y = The user is not pressing down
+                 *      0x00 = Position data is being sent
+                 */
+            }
+            while (Command_Buffer.Count > 0)
+            {
+                command_mutex.WaitOne();
+                SerialCommand command = Command_Buffer.Dequeue();
+                command_mutex.ReleaseMutex();
+
+                Point press_point = command.drawPoint;
+
+                //checks if the pen should actually lift
+                //this "if" statement is to prevent unintentional breaks in lines
+                if (do_lift)
+                {
+                    //If the old erase command is defined
+                    if(old_command != null)
+                    {
+                        //check if distance between erase command and draw command (0x00)
+                        //is withing some spatial range and time range
+                        float MAX_DIST = 10.0f;
+                        //In milliseconds
+                        float MAX_TIME = 500.0f;
+                        Point old_point = old_command.Value.drawPoint;
+                        Point new_point = command.drawPoint;
+
+                        if (command.infoChar == 'C' || command.infoChar == 'S')
+                        {
+                            //end the drawing line
+                            //call pen lift function and update stylus status
+                            stylusStatus = Pen_State.not_pressed;
+                            PointerReleased();
+                        }
+                        else if (command.infoChar == 0x00 && Math.Sqrt(Math.Pow((old_point.X -  new_point.X),2) + Math.Pow((old_point.Y - new_point.Y) ,2)) < MAX_DIST && (command.time_of_command - old_command.Value.time_of_command) < MAX_TIME)
+                        {
+                            //continue drawing the line
+                            stylusStatus = Pen_State.writing;
+                            _currentContactPt = command.drawPoint;
+                            AddPixelToStroke();
+                        }
+                        else
+                        {
+                            //update old_command
+                            old_command = command;
+                            //end the drawing line
+                            //call pen lift function and update stylus status
+                            stylusStatus = Pen_State.not_pressed;
+                            PointerReleased();
+                        }
+                        do_lift = false;
+                    }
+                    else
+                    {
+                        old_command = command;
+                        //end the drawing line
+                        //call pen lift function and update stylus status
+                        stylusStatus = Pen_State.not_pressed;
+                        PointerReleased();
+                        do_lift = true;
+                    }
+                }
+
+                switch (command.infoChar)
+                {
+                    //clear screen command
+                    case 'C':
+                        //call the clear commend from the main thread
+                        ClearInk();
+                        break;
+                    //Recognize strokes command
+                    case 'S':
+                        
+                        var strokes = (from object child in InkCanvas.Children select child as UIElement).ToList();
+                        var result = RecognizeStrokes(strokes, false);
+                        if (string.IsNullOrEmpty(result))
+                        {
+                            MessageBox.Show("Text could not be recognized.");
+                            result = "";
+                        }
+                        RecognizedTextBox.Text = result;
+                        ClearInk();
+
+                        break;
+                    //if no positional data is being sent
+                    case 'E':
+                        //Checks if the pen should really lift
+                        do_lift = true;
+                        old_command = command;
+                        break;
+                    case ((char)(0x00)):
+                        if(stylusStatus == Pen_State.not_pressed)
+                        {
+                            stylusStatus = Pen_State.writing;
+                            StartAddingStroke(command.drawPoint);
+                        }
+                        _currentContactPt = command.drawPoint;
+                        AddPixelToStroke();
+                        break;
+                }
+            }
+        }
 
         public MainWindow()
         {
+            old_command = null;
+            //Setup the serial thread
+            Serial_Loop_Reference = new ThreadStart(this.SerialLoop);
+            Serial_Thread = new Thread(this.Serial_Loop_Reference);
+            DispatcherTimer timer = new DispatcherTimer();
+            timer.Interval = TimeSpan.FromMilliseconds(1);
+            timer.Tick += Window_Tick;
+            timer.Start();
             InitializeComponent();
         }
 
@@ -100,10 +382,17 @@ namespace WritePadSDK_WPFSample
             }
         }
 
+
+        public void AvailablePortsLoad(object sender, EventArgs e)
+        {
+            AvailablePorts.ItemsSource = SerialPort.GetPortNames();
+        }
+
         private void MainWindow_OnLoaded(object sender, RoutedEventArgs e)
         {
             DrawGrid();
             LanguagesCombo.ItemsSource = new[] { "English", "English (UK)", "German", "French", "Spanish", "Portuguese", "Brazilian", "Dutch", "Italian", "Finnish", "Sweddish", "Norwegian", "Danish", "Indonesian" };
+
             DictionaryChanged();
             var langId = WritePadAPI.getLanguage();
             UpdateSelectedLanguage(langId);
@@ -240,6 +529,12 @@ namespace WritePadSDK_WPFSample
             }.ShowDialog();
         }
 
+        private void ConnectToArduino(object sender, RoutedEventArgs e)
+        {
+            string portNum = AvailablePorts.Text;
+            ConnectToUSB(portNum);
+        }
+
         public struct WordAlternative
         {
             public string Word;
@@ -274,6 +569,13 @@ namespace WritePadSDK_WPFSample
             var defaultResultPtr = WritePadAPI.recognizeInkData(InkData, 0);
             var defaultResult = Marshal.PtrToStringUni(defaultResultPtr);
             resultStringList.Add(defaultResult);
+
+
+            //Code to simulate keypress
+            simulator.Keyboard.TextEntry(defaultResult);
+
+
+
             var wordCount = WritePadAPI.HWR_GetResultWordCount(WritePadAPI.getRecoHandle());
             for (var i = 0; i < wordCount; i++)
             {
@@ -402,7 +704,7 @@ namespace WritePadSDK_WPFSample
 
         private void InkCanvas_OnMouseLeave(object sender, MouseEventArgs e)
         {
-            PointerReleased();
+            // PointerReleased();
         }
 
         public static double Distance(double x1, double y1, double x2, double y2)

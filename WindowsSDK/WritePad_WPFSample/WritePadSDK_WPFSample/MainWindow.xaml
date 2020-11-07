@@ -12,7 +12,7 @@
                 <RowDefinition Height="Auto"></RowDefinition>
             </Grid.RowDefinitions>
 
-            
+
             <Grid>
                 <Grid Grid.Row="0">
                     <Grid.RowDefinitions>
@@ -27,21 +27,33 @@
 
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Margin="20 0 0 0" Foreground="Black" FontSize="22" VerticalAlignment="Center">Recognized text:</TextBlock>
-                        <ScrollViewer VerticalScrollBarVisibility="Visible" Height="150" Grid.Column="1" Margin="20 10 20 10">
+                        <ScrollViewer VerticalScrollBarVisibility="Visible" Height="150" Grid.Column="1" Margin="19.8,21,132,20.2">
                             <TextBox FontFamily="Fonts/cour.ttf#Courier New" Name="RecognizedTextBox" HorizontalScrollBarVisibility="Auto" AcceptsReturn="True" IsReadOnly="True" FontSize="20" Foreground="Black" Background="LightGray" Height="Auto" TextWrapping="NoWrap" ></TextBox>
                         </ScrollViewer>
-                        <StackPanel Orientation="Vertical" Grid.Column="2" Margin="0 10 10 0">
+                        <StackPanel Orientation="Vertical" Grid.Column="2" Margin="0,10,9.6,0">
                             <Button Foreground="Black" FontSize="20" Click="RecognizeAllClick">Recognize text</Button>
                             <Button Foreground="Black" FontSize="20" Margin="0 10 0 0" Click="ClearAllClick" Content="Clear"/>
                             <Button Foreground="Black" FontSize="20" Margin="0 10 0 0" Click="OptionsClick" Content="Options"/>
-                            <Label Margin="0 10 0 0" FontSize="18">Language:</Label>
+                            <Label Margin="0 10 0 0" FontSize="18" Content="Language:"/>
                             <ComboBox x:Name="LanguagesCombo" FontSize="18" SelectionChanged="LanguagesCombo_OnSelectionChanged">
                             </ComboBox>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="29*"/>
+                                    <ColumnDefinition Width="103*"/>
+                                </Grid.ColumnDefinitions>
+                                <Label Margin="0,10,0,0.2" FontSize="18" Grid.ColumnSpan="2">Port:
+                                </Label>
+                                <ComboBox HorizontalAlignment="Left" Margin="19.2,10,0,0" VerticalAlignment="Top" Width="84" Name="AvailablePorts" Height="34" Grid.Column="1" FontSize="18"  MouseEnter="AvailablePortsLoad"/>
+                            </Grid>
+                            <Button FontSize="18" Margin="0, 10, 0, 0" Height="37" Click="ConnectToArduino">Connect</Button>
                         </StackPanel>
+                        <TextBlock Grid.Column="1" HorizontalAlignment="Left" Margin="19.8,254,0,0" TextWrapping="Wrap" Name="ErrorText" FontSize="18" VerticalAlignment="Top"/>
                     </Grid>
 
                     <Grid Grid.Row="1">
-                        <Canvas x:Name="InkCanvas" Margin="20 20 30 30" MouseLeftButtonDown="OnCanvasPointerPressed" Background="#F0F088" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MouseLeftButtonUp="OnCanvasPointerReleased" MouseMove="OnCanvasPointerMoved" MouseLeave="InkCanvas_OnMouseLeave" />
+                        <Canvas x:Name="InkCanvas" Margin="20 20 30 30" Background="#F0F088" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                        <!--<Canvas x:Name="InkCanvas" Margin="20 20 30 30" MouseLeftButtonDown="OnCanvasPointerPressed" Background="#F0F088" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MouseLeftButtonUp="OnCanvasPointerReleased" MouseMove="OnCanvasPointerMoved" MouseLeave="InkCanvas_OnMouseLeave" />-->
                     </Grid>
                 </Grid>
             </Grid>
